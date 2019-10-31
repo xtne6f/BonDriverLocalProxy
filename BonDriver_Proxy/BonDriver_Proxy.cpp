@@ -62,7 +62,7 @@ LPCWSTR CProxyClient3::GetTunerName()
     DWORD n;
     if (Write("GTun") && ReadAll(&n, 4)) {
         n %= 256;
-        if (n != 0 && ReadAll(&m_tunerName, n * sizeof(WCHAR))) {
+        if (n != 0 && ReadAll(m_tunerName, n * sizeof(WCHAR))) {
             m_tunerName[n] = L'\0';
             return m_tunerName;
         }
@@ -83,7 +83,7 @@ LPCWSTR CProxyClient3::EnumTuningSpace(const DWORD dwSpace)
     DWORD n;
     if (Write("ETun", &dwSpace) && ReadAll(&n, 4)) {
         n %= 256;
-        if (n != 0 && ReadAll(&m_tuningSpace, n * sizeof(WCHAR))) {
+        if (n != 0 && ReadAll(m_tuningSpace, n * sizeof(WCHAR))) {
             m_tuningSpace[n] = L'\0';
             return m_tuningSpace;
         }
@@ -97,7 +97,7 @@ LPCWSTR CProxyClient3::EnumChannelName(const DWORD dwSpace, const DWORD dwChanne
     DWORD n;
     if (Write("ECha", &dwSpace, &dwChannel) && ReadAll(&n, 4)) {
         n %= 256;
-        if (n != 0 && ReadAll(&m_channelName, n * sizeof(WCHAR))) {
+        if (n != 0 && ReadAll(m_channelName, n * sizeof(WCHAR))) {
             m_channelName[n] = L'\0';
             return m_channelName;
         }
@@ -193,7 +193,7 @@ const BOOL CProxyClient3::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRe
                     CloseHandle(m_hPipe);
                     m_hPipe = INVALID_HANDLE_VALUE;
                 }
-                else if (ReadAll(&m_tsRemain, 4) && ReadAll(&m_tsBuf, n - 4)) {
+                else if (ReadAll(&m_tsRemain, 4) && ReadAll(m_tsBuf, n - 4)) {
                     m_tsBufSize = n - 4;
                 }
             }
@@ -221,7 +221,8 @@ void CProxyClient3::PurgeTsStream()
 
 void CProxyClient3::Release()
 {
-    if (m_hPipe != INVALID_HANDLE_VALUE) {
+    DWORD n;
+    if (Write("Rele") && ReadAll(&n, 4)) {
         CloseHandle(m_hPipe);
     }
     DeleteCriticalSection(&m_cs);

@@ -236,7 +236,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                 union {
                     BOOL b;
                     DWORD n;
-                    float f;
                 } param1, param2;
                 char cmd[5] = {};
                 memcpy(cmd, conn.buf, 4);
@@ -523,21 +522,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     }
 
     for (int i = 0; connList[i]; ++i) {
-        BDP_CONNECTION &conn = *connList[i];
-        if (conn.state == BDP_ST_CONNECTING ||
-            conn.state == BDP_ST_READING ||
-            conn.state == BDP_ST_WRITING) {
-            CancelIo(conn.hPipe);
-        }
-        if (conn.state >= BDP_ST_CONNECTED) {
-            DisconnectNamedPipe(conn.hPipe);
-        }
-        CloseHandle(conn.hPipe);
+        CloseHandle(connList[i]->hPipe);
         CloseHandle(hEventList[i]);
         delete connList[i];
-        connList[i] = nullptr;
     }
-    CloseBonDriver(connList, &hLib, &bon, &bon2, &bon3, &doneCreateBon);
     delete[] ringBuf;
     CoUninitialize();
     return 0;
