@@ -231,6 +231,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     bool doneCreateBon = false;
     bool firstConnecting = false;
     BOOL openTunerResult;
+    bool initChSet = false;
 
     for (;;) {
         DWORD connCount = 0;
@@ -318,6 +319,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                                     }
                                 }
                             }
+                            initChSet = false;
                         }
                         type = bon3 ? 3 : bon2 ? 2 : bon ? 1 : 0;
                     }
@@ -373,7 +375,17 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                 }
                 else if (!strcmp(cmd, "SCh2")) {
                     if (bon2) {
-                        BOOL b = IsHighestPriority(conn.priority, connList) ? bon2->SetChannel(param1.n, param2.n) : FALSE;
+                        BOOL b = FALSE;
+                        if (IsHighestPriority(conn.priority, connList)) {
+                            // 最初のSetChannel()までGetCurChannel()等の結果があまり信用できないため
+                            if (initChSet && bon2->GetCurChannel() == param2.n && bon2->GetCurSpace() == param1.n) {
+                                b = TRUE;
+                            }
+                            else if (bon2->SetChannel(param1.n, param2.n)) {
+                                b = TRUE;
+                                initChSet = true;
+                            }
+                        }
                         conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &b);
                     }
                 }
@@ -394,6 +406,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                         if (!conn.doneOpenTuner) {
                             if (!AnyDoneOpenTuner(connList)) {
                                 openTunerResult = bon->OpenTuner();
+                                initChSet = false;
                             }
                             conn.doneOpenTuner = true;
                         }
