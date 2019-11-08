@@ -4,6 +4,7 @@
 #include <shellapi.h>
 #include <string.h>
 #include <wchar.h>
+#include <memory>
 #include "IBonDriver3.h"
 
 namespace
@@ -36,6 +37,7 @@ struct BDP_CONNECTION {
     // 以下はstate>=BDP_ST_CONNECTEDのとき有効
     bool doneOpenTuner;
     DWORD priority;
+    // MAXDWORDは未使用を表す
     DWORD ringBufFront;
     DWORD bufCount;
     BYTE buf[8 + TSDATASIZE];
@@ -46,7 +48,7 @@ struct BDP_RING_BUFFER {
     BYTE buf[4 + TSDATASIZE];
 };
 
-bool SetPriority(BDP_CONNECTION &conn, DWORD priority, BDP_CONNECTION **connList)
+bool SetPriority(BDP_CONNECTION &conn, DWORD priority, std::unique_ptr<BDP_CONNECTION> *connList)
 {
     // 上位16bitは絶対優先度、下位16bitは接続順
     priority <<= 16;
@@ -77,10 +79,10 @@ bool SetPriority(BDP_CONNECTION &conn, DWORD priority, BDP_CONNECTION **connList
     return true;
 }
 
-bool IsHighestPriority(DWORD priority, BDP_CONNECTION **connList)
+bool IsHighestPriority(DWORD priority, std::unique_ptr<BDP_CONNECTION> *connList, bool forRingBuf = false)
 {
     for (int i = 0; connList[i]; ++i) {
-        if (connList[i]->state >= BDP_ST_CONNECTED) {
+        if (connList[i]->state >= BDP_ST_CONNECTED && (!forRingBuf || connList[i]->ringBufFront != MAXDWORD)) {
             // 絶対優先度の上位8bitが大きいものを優先、下位は無視
             if ((connList[i]->priority >> 24) > (priority >> 24)) {
                 return false;
@@ -103,7 +105,7 @@ bool IsHighestPriority(DWORD priority, BDP_CONNECTION **connList)
     return true;
 }
 
-bool AnyDoneOpenTuner(BDP_CONNECTION **connList)
+bool AnyDoneOpenTuner(std::unique_ptr<BDP_CONNECTION> *connList)
 {
     for (int i = 0; connList[i]; ++i) {
         if (connList[i]->state >= BDP_ST_CONNECTED && connList[i]->doneOpenTuner) {
@@ -113,7 +115,7 @@ bool AnyDoneOpenTuner(BDP_CONNECTION **connList)
     return false;
 }
 
-void CloseTuner(BDP_CONNECTION &conn, BDP_CONNECTION **connList, IBonDriver *bon)
+void CloseTuner(BDP_CONNECTION &conn, std::unique_ptr<BDP_CONNECTION> *connList, IBonDriver *bon)
 {
     if (conn.doneOpenTuner) {
         conn.doneOpenTuner = false;
@@ -123,7 +125,7 @@ void CloseTuner(BDP_CONNECTION &conn, BDP_CONNECTION **connList, IBonDriver *bon
     }
 }
 
-void CloseBonDriver(BDP_CONNECTION **connList, HMODULE *hLib, IBonDriver **bon, IBonDriver2 **bon2, IBonDriver3 **bon3, bool *doneCreateBon)
+void CloseBonDriver(std::unique_ptr<BDP_CONNECTION> *connList, HMODULE *hLib, IBonDriver **bon, IBonDriver2 **bon2, IBonDriver3 **bon3, bool *doneCreateBon)
 {
     for (int i = 0; connList[i]; ++i) {
         if (connList[i]->state >= BDP_ST_CONNECTED) {
@@ -140,6 +142,51 @@ void CloseBonDriver(BDP_CONNECTION **connList, HMODULE *hLib, IBonDriver **bon, 
     if (*hLib) {
         FreeLibrary(*hLib);
         *hLib = nullptr;
+    }
+}
+
+void RotateRingBuffer(DWORD n, std::unique_ptr<BDP_CONNECTION> *connList, std::unique_ptr<BDP_RING_BUFFER> *ringBuf, DWORD ringBufNum)
+{
+    for (int i = 0; connList[i]; ++i) {
+        if (connList[i]->state >= BDP_ST_CONNECTED && connList[i]->ringBufFront != MAXDWORD) {
+            connList[i]->ringBufFront = (connList[i]->ringBufFront + n) % ringBufNum;
+        }
+    }
+    for (; n > 0; --n) {
+        for (DWORD i = ringBufNum - 1; i > 0; --i) {
+            ringBuf[i].swap(ringBuf[i - 1]);
+        }
+    }
+}
+
+bool ExpandRingBuffer(std::unique_ptr<BDP_CONNECTION> *connList, std::unique_ptr<BDP_RING_BUFFER> *ringBuf, DWORD &ringBufNum, DWORD &ringBufRear)
+{
+   for (int i = 0; connList[i]; ++i) {
+       if (connList[i]->state >= BDP_ST_CONNECTED && (ringBufRear + 1) % ringBufNum == connList[i]->ringBufFront) {
+           // 空きがないので増やす
+           // ringBufRearが末尾に来るように回転
+           RotateRingBuffer((ringBufNum - 1 - ringBufRear) % ringBufNum, connList, ringBuf, ringBufNum);
+           ringBufRear = ringBufNum - 1;
+           ringBuf[ringBufNum++].reset(new BDP_RING_BUFFER);
+           return true;
+       }
+   }
+   return false;
+}
+
+void ShrinkRingBuffer(std::unique_ptr<BDP_CONNECTION> *connList, std::unique_ptr<BDP_RING_BUFFER> *ringBuf, DWORD &ringBufNum, DWORD &ringBufRear)
+{
+    if (ringBufNum > 1) {
+        for (int i = 0; connList[i]; ++i) {
+            if (connList[i]->state >= BDP_ST_CONNECTED && (ringBufRear + 1) % ringBufNum == connList[i]->ringBufFront) {
+                // 空きがない
+                return;
+            }
+        }
+        // ringBufRearが末尾の1つ手前に来るように回転
+        RotateRingBuffer((ringBufNum * 2 - 2 - ringBufRear) % ringBufNum, connList, ringBuf, ringBufNum);
+        ringBufRear = ringBufNum - 2;
+        ringBuf[--ringBufNum].reset();
     }
 }
 }
@@ -170,9 +217,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     // BonDriverがCOMを利用するかもしれないため
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    BDP_CONNECTION *connList[MAXIMUM_WAIT_OBJECTS + 1] = {};
+    std::unique_ptr<BDP_CONNECTION> connList[MAXIMUM_WAIT_OBJECTS + 1];
     HANDLE hEventList[MAXIMUM_WAIT_OBJECTS];
-    BDP_RING_BUFFER *ringBuf = new BDP_RING_BUFFER[BDP_RING_BUFFER_NUM];
+    int ringBufShrinkCount = 0;
+    std::unique_ptr<BDP_RING_BUFFER> ringBuf[BDP_RING_BUFFER_NUM];
+    ringBuf[0].reset(new BDP_RING_BUFFER);
+    DWORD ringBufNum = 1;
     DWORD ringBufRear = 0;
     HMODULE hLib = nullptr;
     IBonDriver *bon = nullptr;
@@ -193,7 +243,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
             if (conn.state == BDP_ST_IDLE) {
                 conn.doneOpenTuner = false;
                 conn.priority = 0;
-                conn.ringBufFront = ringBufRear;
+                conn.ringBufFront = MAXDWORD;
                 conn.bufCount = 0;
                 OVERLAPPED olZero = {};
                 conn.ol = olZero;
@@ -371,39 +421,52 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                 }
                 else if (!strcmp(cmd, "GRea")) {
                     if (bon) {
-                        DWORD n = bon->GetReadyCount() + (conn.ringBufFront == ringBufRear ? 0 : 1);
+                        DWORD n = bon->GetReadyCount() + (conn.ringBufFront == MAXDWORD || conn.ringBufFront == ringBufRear ? 0 : 1);
                         conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &n);
                     }
                 }
                 else if (!strcmp(cmd, "GTsS")) {
                     if (bon) {
-                        if (conn.ringBufFront == ringBufRear && IsHighestPriority(conn.priority, connList)) {
+                        if (conn.ringBufFront == MAXDWORD) {
+                            // 使用開始
+                            conn.ringBufFront = ringBufRear;
+                        }
+                        if (conn.ringBufFront == ringBufRear && IsHighestPriority(conn.priority, connList, true)) {
+                            // 定期的にリングバッファを縮める
+                            if (++ringBufShrinkCount > 100) {
+                                ShrinkRingBuffer(connList, ringBuf, ringBufNum, ringBufRear);
+                                ringBufShrinkCount = 0;
+                            }
                             BYTE *buf;
                             DWORD bufSize;
                             DWORD remain;
                             if (bon->GetTsStream(&buf, &bufSize, &remain) && buf) {
                                 while (bufSize != 0) {
-                                    if (bufSize > sizeof(ringBuf[0].buf) - 4) {
+                                    if (bufSize > sizeof(ringBuf[0]->buf) - 4) {
                                         ++remain;
-                                        memcpy(ringBuf[ringBufRear].buf, &remain, 4);
+                                        memcpy(ringBuf[ringBufRear]->buf, &remain, 4);
                                         --remain;
-                                        ringBuf[ringBufRear].bufCount = sizeof(ringBuf[0].buf);
+                                        ringBuf[ringBufRear]->bufCount = sizeof(ringBuf[0]->buf);
                                     }
                                     else {
-                                        memcpy(ringBuf[ringBufRear].buf, &remain, 4);
-                                        ringBuf[ringBufRear].bufCount = 4 + bufSize;
+                                        memcpy(ringBuf[ringBufRear]->buf, &remain, 4);
+                                        ringBuf[ringBufRear]->bufCount = 4 + bufSize;
                                     }
-                                    memcpy(ringBuf[ringBufRear].buf + 4, buf, ringBuf[ringBufRear].bufCount - 4);
-                                    buf += ringBuf[ringBufRear].bufCount - 4;
-                                    bufSize -= ringBuf[ringBufRear].bufCount - 4;
-                                    ringBufRear = (ringBufRear + 1) % BDP_RING_BUFFER_NUM;
+                                    memcpy(ringBuf[ringBufRear]->buf + 4, buf, ringBuf[ringBufRear]->bufCount - 4);
+                                    buf += ringBuf[ringBufRear]->bufCount - 4;
+                                    bufSize -= ringBuf[ringBufRear]->bufCount - 4;
+                                    // 最長でBDP_RING_BUFFER_NUMまでリングバッファを伸ばす
+                                    if (ringBufNum < BDP_RING_BUFFER_NUM && ExpandRingBuffer(connList, ringBuf, ringBufNum, ringBufRear)) {
+                                        ringBufShrinkCount = 0;
+                                    }
+                                    ringBufRear = (ringBufRear + 1) % ringBufNum;
                                 }
                             }
                         }
                         if (conn.ringBufFront != ringBufRear) {
-                            conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &ringBuf[conn.ringBufFront].bufCount,
-                                                  ringBuf[conn.ringBufFront].buf, ringBuf[conn.ringBufFront].bufCount);
-                            conn.ringBufFront = (conn.ringBufFront + 1) % BDP_RING_BUFFER_NUM;
+                            conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &ringBuf[conn.ringBufFront]->bufCount,
+                                                  ringBuf[conn.ringBufFront]->buf, ringBuf[conn.ringBufFront]->bufCount);
+                            conn.ringBufFront = (conn.ringBufFront + 1) % ringBufNum;
                         }
                         else {
                             DWORD n = 4;
@@ -417,7 +480,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                         if (IsHighestPriority(conn.priority, connList)) {
                             bon->PurgeTsStream();
                         }
-                        conn.ringBufFront = ringBufRear;
+                        if (conn.ringBufFront != MAXDWORD) {
+                            conn.ringBufFront = ringBufRear;
+                        }
                         DWORD n = 0;
                         conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &n);
                     }
@@ -447,7 +512,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
             // パイプを増やす
             hEventList[connCount] = CreateEvent(nullptr, TRUE, FALSE, nullptr);
             if (hEventList[connCount]) {
-                connList[connCount] = new BDP_CONNECTION;
+                connList[connCount].reset(new BDP_CONNECTION);
                 WCHAR pipeName[MAX_PATH + 64];
                 wcscpy_s(pipeName, L"\\\\.\\pipe\\BonDriverLocalProxy_");
                 wcscat_s(pipeName, origin);
@@ -455,8 +520,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                                                              0, PIPE_UNLIMITED_INSTANCES, TSDATASIZE + 256, 256, 0, nullptr);
                 if (connList[connCount]->hPipe == INVALID_HANDLE_VALUE) {
                     CloseHandle(hEventList[connCount]);
-                    delete connList[connCount];
-                    connList[connCount] = nullptr;
+                    connList[connCount].reset();
                     if (connCount == 0) {
                         break;
                     }
@@ -483,7 +547,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                     if (conn.state == BDP_ST_CONNECTING) {
                         conn.doneOpenTuner = false;
                         conn.priority = 0;
-                        conn.ringBufFront = ringBufRear;
+                        conn.ringBufFront = MAXDWORD;
                         conn.bufCount = 0;
                         conn.state = BDP_ST_CONNECTED;
                     }
@@ -524,9 +588,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     for (int i = 0; connList[i]; ++i) {
         CloseHandle(connList[i]->hPipe);
         CloseHandle(hEventList[i]);
-        delete connList[i];
     }
-    delete[] ringBuf;
     CoUninitialize();
     return 0;
 }
