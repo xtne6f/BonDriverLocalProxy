@@ -10,7 +10,6 @@ HINSTANCE g_hModule;
 
 CProxyClient3::CProxyClient3(HANDLE hPipe)
     : m_hPipe(hPipe)
-    , m_tsBufSize(0)
 {
     InitializeCriticalSection(&m_cs);
 }
@@ -32,40 +31,35 @@ DWORD CProxyClient3::CreateBon(LPCWSTR param)
     }
     CBlockLock lock(&m_cs);
     DWORD n;
-    return Write("Crea", &priority) && ReadAll(&n, 4) ? n : 0xFFFFFFFF;
+    return WriteAndRead4(&n, "Crea", &priority) ? n : 0xFFFFFFFF;
 }
 
 const DWORD CProxyClient3::GetTotalDeviceNum()
 {
     CBlockLock lock(&m_cs);
     DWORD n;
-    return Write("GTot") && ReadAll(&n, 4) ? n : 0;
+    return WriteAndRead4(&n, "GTot") ? n : 0;
 }
 
 const DWORD CProxyClient3::GetActiveDeviceNum()
 {
     CBlockLock lock(&m_cs);
     DWORD n;
-    return Write("GAct") && ReadAll(&n, 4) ? n : 0;
+    return WriteAndRead4(&n, "GAct") ? n : 0;
 }
 
 const BOOL CProxyClient3::SetLnbPower(const BOOL bEnable)
 {
     CBlockLock lock(&m_cs);
     BOOL b;
-    return Write("SLnb", &bEnable) && ReadAll(&b, 4) ? b : FALSE;
+    return WriteAndRead4(&b, "SLnb", &bEnable) ? b : FALSE;
 }
 
 LPCWSTR CProxyClient3::GetTunerName()
 {
     CBlockLock lock(&m_cs);
-    DWORD n;
-    if (Write("GTun") && ReadAll(&n, 4)) {
-        n %= 256;
-        if (n != 0 && ReadAll(m_tunerName, n * sizeof(WCHAR))) {
-            m_tunerName[n] = L'\0';
-            return m_tunerName;
-        }
+    if (WriteAndReadString(m_tunerName, "GTun")) {
+        return m_tunerName;
     }
     return nullptr;
 }
@@ -74,19 +68,14 @@ const BOOL CProxyClient3::IsTunerOpening()
 {
     CBlockLock lock(&m_cs);
     BOOL b;
-    return Write("ITun") && ReadAll(&b, 4) ? b : FALSE;
+    return WriteAndRead4(&b, "ITun") ? b : FALSE;
 }
 
 LPCWSTR CProxyClient3::EnumTuningSpace(const DWORD dwSpace)
 {
     CBlockLock lock(&m_cs);
-    DWORD n;
-    if (Write("ETun", &dwSpace) && ReadAll(&n, 4)) {
-        n %= 256;
-        if (n != 0 && ReadAll(m_tuningSpace, n * sizeof(WCHAR))) {
-            m_tuningSpace[n] = L'\0';
-            return m_tuningSpace;
-        }
+    if (WriteAndReadString(m_tuningSpace, "ETun", &dwSpace)) {
+        return m_tuningSpace;
     }
     return nullptr;
 }
@@ -94,13 +83,8 @@ LPCWSTR CProxyClient3::EnumTuningSpace(const DWORD dwSpace)
 LPCWSTR CProxyClient3::EnumChannelName(const DWORD dwSpace, const DWORD dwChannel)
 {
     CBlockLock lock(&m_cs);
-    DWORD n;
-    if (Write("ECha", &dwSpace, &dwChannel) && ReadAll(&n, 4)) {
-        n %= 256;
-        if (n != 0 && ReadAll(m_channelName, n * sizeof(WCHAR))) {
-            m_channelName[n] = L'\0';
-            return m_channelName;
-        }
+    if (WriteAndReadString(m_channelName, "ECha", &dwSpace, &dwChannel)) {
+        return m_channelName;
     }
     return nullptr;
 }
@@ -109,38 +93,35 @@ const BOOL CProxyClient3::SetChannel(const DWORD dwSpace, const DWORD dwChannel)
 {
     CBlockLock lock(&m_cs);
     BOOL b;
-    return Write("SCh2", &dwSpace, &dwChannel) && ReadAll(&b, 4) ? b : FALSE;
+    return WriteAndRead4(&b, "SCh2", &dwSpace, &dwChannel) ? b : FALSE;
 }
 
 const DWORD CProxyClient3::GetCurSpace()
 {
     CBlockLock lock(&m_cs);
     DWORD n;
-    return Write("GCSp") && ReadAll(&n, 4) ? n : 0;
+    return WriteAndRead4(&n, "GCSp") ? n : 0xFFFFFFFF;
 }
 
 const DWORD CProxyClient3::GetCurChannel()
 {
     CBlockLock lock(&m_cs);
     DWORD n;
-    return Write("GCCh") && ReadAll(&n, 4) ? n : 0;
+    return WriteAndRead4(&n, "GCCh") ? n : 0xFFFFFFFF;
 }
 
 const BOOL CProxyClient3::OpenTuner()
 {
     CBlockLock lock(&m_cs);
     BOOL b;
-    return Write("Open") && ReadAll(&b, 4) ? b : FALSE;
+    return WriteAndRead4(&b, "Open") ? b : FALSE;
 }
 
 void CProxyClient3::CloseTuner()
 {
     CBlockLock lock(&m_cs);
     DWORD n;
-    if (Write("Clos")) {
-        ReadAll(&n, 4);
-    }
-    m_tsBufSize = 0;
+    WriteAndRead4(&n, "Clos");
 }
 
 const BOOL CProxyClient3::SetChannel(const BYTE bCh)
@@ -148,14 +129,14 @@ const BOOL CProxyClient3::SetChannel(const BYTE bCh)
     CBlockLock lock(&m_cs);
     DWORD ch = bCh;
     BOOL b;
-    return Write("SCha", &ch) && ReadAll(&b, 4) ? b : FALSE;
+    return WriteAndRead4(&b, "SCha", &ch) ? b : FALSE;
 }
 
 const float CProxyClient3::GetSignalLevel()
 {
     CBlockLock lock(&m_cs);
     float f;
-    return Write("GSig") && ReadAll(&f, 4) ? f : 0;
+    return WriteAndRead4(&f, "GSig") ? f : 0;
 }
 
 const DWORD CProxyClient3::WaitTsStream(const DWORD dwTimeOut)
@@ -169,7 +150,7 @@ const DWORD CProxyClient3::GetReadyCount()
 {
     CBlockLock lock(&m_cs);
     DWORD n;
-    return (Write("GRea") && ReadAll(&n, 4) ? n : 0) + (m_tsBufSize != 0 ? 1 : 0);
+    return WriteAndRead4(&n, "GRea") ? n : 0;
 }
 
 const BOOL CProxyClient3::GetTsStream(BYTE *pDst, DWORD *pdwSize, DWORD *pdwRemain)
@@ -185,25 +166,24 @@ const BOOL CProxyClient3::GetTsStream(BYTE **ppDst, DWORD *pdwSize, DWORD *pdwRe
 {
     CBlockLock lock(&m_cs);
     if (ppDst && pdwSize) {
-        if (m_tsBufSize == 0) {
-            DWORD n;
-            if (Write("GTsS") && ReadAll(&n, 4)) {
-                if (n < 4 || n - 4 > sizeof(m_tsBuf)) {
-                    // 戻り値が異常
-                    CloseHandle(m_hPipe);
-                    m_hPipe = INVALID_HANDLE_VALUE;
-                }
-                else if (ReadAll(&m_tsRemain, 4) && ReadAll(m_tsBuf, n - 4)) {
-                    m_tsBufSize = n - 4;
-                }
+        DWORD tsBufSize = 0;
+        DWORD tsRemain = 0;
+        DWORD n;
+        if (WriteAndRead4(&n, "GTsS")) {
+            if (n < 4 || n - 4 > sizeof(m_tsBuf)) {
+                // 戻り値が異常
+                CloseHandle(m_hPipe);
+                m_hPipe = INVALID_HANDLE_VALUE;
+            }
+            else if (ReadAll(&tsRemain, 4) && ReadAll(m_tsBuf, n - 4)) {
+                tsBufSize = n - 4;
             }
         }
         *ppDst = m_tsBuf;
-        *pdwSize = m_tsBufSize;
+        *pdwSize = tsBufSize;
         if (pdwRemain) {
-            *pdwRemain = m_tsBufSize == 0 ? 0 : m_tsRemain;
+            *pdwRemain = tsBufSize == 0 ? 0 : tsRemain;
         }
-        m_tsBufSize = 0;
         return TRUE;
     }
     return FALSE;
@@ -213,21 +193,36 @@ void CProxyClient3::PurgeTsStream()
 {
     CBlockLock lock(&m_cs);
     DWORD n;
-    if (Write("Purg")) {
-        ReadAll(&n, 4);
-    }
-    m_tsBufSize = 0;
+    WriteAndRead4(&n, "Purg");
 }
 
 void CProxyClient3::Release()
 {
     DWORD n;
-    if (Write("Rele") && ReadAll(&n, 4)) {
+    if (WriteAndRead4(&n, "Rele")) {
         CloseHandle(m_hPipe);
     }
     DeleteCriticalSection(&m_cs);
     g_this = nullptr;
     delete this;
+}
+
+bool CProxyClient3::WriteAndRead4(void *buf, const char (&cmd)[5], const void *param1, const void *param2)
+{
+    return Write(cmd, param1, param2) && ReadAll(buf, 4);
+}
+
+bool CProxyClient3::WriteAndReadString(WCHAR (&buf)[256], const char (&cmd)[5], const void *param1, const void *param2)
+{
+    DWORD n;
+    if (WriteAndRead4(&n, cmd, param1, param2)) {
+        n %= 256;
+        if (n != 0 && ReadAll(buf, n * sizeof(WCHAR))) {
+            buf[n] = L'\0';
+            return true;
+        }
+    }
+    return false;
 }
 
 bool CProxyClient3::Write(const char (&cmd)[5], const void *param1, const void *param2)

@@ -34,12 +34,12 @@ public:
     void PurgeTsStream();
     void Release();
 private:
+    bool WriteAndRead4(void *buf, const char (&cmd)[5], const void *param1 = nullptr, const void *param2 = nullptr);
+    bool WriteAndReadString(WCHAR (&buf)[256], const char (&cmd)[5], const void *param1 = nullptr, const void *param2 = nullptr);
     bool Write(const char (&cmd)[5], const void *param1 = nullptr, const void *param2 = nullptr);
     bool ReadAll(void *buf, DWORD len);
     CRITICAL_SECTION m_cs;
     HANDLE m_hPipe;
-    DWORD m_tsBufSize;
-    DWORD m_tsRemain;
     BYTE m_tsBuf[48128];
     WCHAR m_tunerName[256];
     WCHAR m_tuningSpace[256];
