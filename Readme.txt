@@ -36,7 +36,7 @@ BonDriverとBonDriverLocalProxy.exeを置いてください。
 ャンネル変更できません。設定ファイルはありません。
 
 ■ライセンス
-MITとします。
+MITとします。IBonDriver*.hの追記部分はパブリックドメインとします。
 
 ■ソース
 https://github.com/xtne6f/BonDriverLocalProxy

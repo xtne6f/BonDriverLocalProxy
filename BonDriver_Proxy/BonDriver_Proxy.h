@@ -9,6 +9,7 @@ class CProxyClient3 : public IBonDriver3
 {
 public:
     CProxyClient3(HANDLE hPipe);
+    STRUCT_IBONDRIVER3 &GetBonStruct3() { return m_bonStruct3; }
     DWORD CreateBon(LPCWSTR param);
     // IBonDriver3
     const DWORD GetTotalDeviceNum();
@@ -44,12 +45,14 @@ private:
     WCHAR m_tunerName[256];
     WCHAR m_tuningSpace[256];
     WCHAR m_channelName[256];
+    STRUCT_IBONDRIVER3 m_bonStruct3;
 };
 
 class CProxyClient2 : public IBonDriver2
 {
 public:
     CProxyClient2(CProxyClient3 *down) : m_down(down) {}
+    STRUCT_IBONDRIVER2 &GetBonStruct2() { return m_down->GetBonStruct3().st2; }
     // IBonDriver2
     LPCWSTR GetTunerName() { return m_down->GetTunerName(); }
     const BOOL IsTunerOpening() { return m_down->IsTunerOpening(); }
@@ -77,6 +80,7 @@ class CProxyClient : public IBonDriver
 {
 public:
     CProxyClient(CProxyClient3 *down) : m_down(down) {}
+    STRUCT_IBONDRIVER &GetBonStruct() { return m_down->GetBonStruct3().st2.st; }
     // IBonDriver
     const BOOL OpenTuner() { return m_down->OpenTuner(); }
     void CloseTuner() { m_down->CloseTuner(); }

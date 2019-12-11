@@ -1,9 +1,11 @@
 ﻿#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <objbase.h>
 #include <shellapi.h>
 #include <string.h>
 #include <wchar.h>
+#include <algorithm>
 #include <memory>
 #include "IBonDriver3.h"
 
@@ -191,7 +193,12 @@ void ShrinkRingBuffer(std::unique_ptr<BDP_CONNECTION> *connList, std::unique_ptr
 }
 }
 
+#ifdef __MINGW32__
+__declspec(dllexport) // ASLRを無効にしないため(CVE-2018-5392)
+int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+#else
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
+#endif
 {
     static_cast<void>(hInstance);
     static_cast<void>(hPrevInstance);
@@ -228,6 +235,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     IBonDriver *bon = nullptr;
     IBonDriver2 *bon2 = nullptr;
     IBonDriver3 *bon3 = nullptr;
+    CBonStructAdapter bonAdapter;
+    CBonStruct2Adapter bon2Adapter;
+    CBonStruct3Adapter bon3Adapter;
     bool doneCreateBon = false;
     bool firstConnecting = false;
     BOOL openTunerResult;
@@ -307,16 +317,37 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                                 wcscat_s(libPath, L".dll");
                                 hLib = LoadLibrary(libPath);
                                 if (hLib) {
-                                    IBonDriver *(*funcCreateBonDriver)() = reinterpret_cast<IBonDriver*(*)()>(GetProcAddress(hLib, "CreateBonDriver"));
-                                    if (funcCreateBonDriver) {
-                                        bon = funcCreateBonDriver();
-                                        if (bon) {
-                                            bon2 = dynamic_cast<IBonDriver2*>(bon);
-                                            if (bon2) {
-                                                bon3 = dynamic_cast<IBonDriver3*>(bon2);
+                                    const STRUCT_IBONDRIVER *(*funcCreateBonStruct)() = reinterpret_cast<const STRUCT_IBONDRIVER*(*)()>(GetProcAddress(hLib, "CreateBonStruct"));
+                                    if (funcCreateBonStruct) {
+                                        // 特定コンパイラに依存しないI/Fを使う
+                                        const STRUCT_IBONDRIVER *st = funcCreateBonStruct();
+                                        if (st) {
+                                            if (bon3Adapter.Adapt(*st)) {
+                                                bon = bon2 = bon3 = &bon3Adapter;
+                                            }
+                                            else if (bon2Adapter.Adapt(*st)) {
+                                                bon = bon2 = &bon2Adapter;
+                                            }
+                                            else {
+                                                bonAdapter.Adapt(*st);
+                                                bon = &bonAdapter;
                                             }
                                         }
                                     }
+#ifdef _MSC_VER
+                                    else {
+                                        IBonDriver *(*funcCreateBonDriver)() = reinterpret_cast<IBonDriver*(*)()>(GetProcAddress(hLib, "CreateBonDriver"));
+                                        if (funcCreateBonDriver) {
+                                            bon = funcCreateBonDriver();
+                                            if (bon) {
+                                                bon2 = dynamic_cast<IBonDriver2*>(bon);
+                                                if (bon2) {
+                                                    bon3 = dynamic_cast<IBonDriver3*>(bon2);
+                                                }
+                                            }
+                                        }
+                                    }
+#endif
                                 }
                             }
                             initChSet = false;
@@ -347,7 +378,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                     if (bon2) {
                         LPCWSTR tunerName = bon2->GetTunerName();
                         DWORD n = static_cast<DWORD>(tunerName ? wcslen(tunerName) + 1 : 0);
-                        n = min(n, 255);
+                        n = std::min<DWORD>(n, 255);
                         conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &n, tunerName, n * sizeof(WCHAR));
                     }
                 }
@@ -361,7 +392,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                     if (bon2) {
                         LPCWSTR tuningSpace = bon2->EnumTuningSpace(param1.n);
                         DWORD n = static_cast<DWORD>(tuningSpace ? wcslen(tuningSpace) + 1 : 0);
-                        n = min(n, 255);
+                        n = std::min<DWORD>(n, 255);
                         conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &n, tuningSpace, n * sizeof(WCHAR));
                     }
                 }
@@ -369,7 +400,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                     if (bon2) {
                         LPCWSTR channelName = bon2->EnumChannelName(param1.n, param2.n);
                         DWORD n = static_cast<DWORD>(channelName ? wcslen(channelName) + 1 : 0);
-                        n = min(n, 255);
+                        n = std::min<DWORD>(n, 255);
                         conn.bufCount = Write(conn.hPipe, conn.buf, &conn.ol, &n, channelName, n * sizeof(WCHAR));
                     }
                 }

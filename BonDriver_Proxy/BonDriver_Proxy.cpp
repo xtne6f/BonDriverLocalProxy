@@ -278,7 +278,13 @@ BOOL APIENTRY DllMain(HINSTANCE hModule, DWORD dwReason, LPVOID lpReserved)
     return TRUE;
 }
 
-extern "C" BONAPI IBonDriver * CreateBonDriver(void)
+// CreateBonDriver()は呼出規約等がMSVC仕様なオブジェクトを返すことがほぼ前提のため、他のコンパイラではエクスポートしない
+#ifdef _MSC_VER
+extern "C" BONAPI
+#else
+static
+#endif
+IBonDriver * CreateBonDriver(void)
 {
     if (!g_this) {
         WCHAR exePath[MAX_PATH + 64] = {};
@@ -397,4 +403,21 @@ extern "C" BONAPI IBonDriver * CreateBonDriver(void)
         }
     }
     return g_this;
+}
+
+extern "C" BONAPI const STRUCT_IBONDRIVER * CreateBonStruct(void)
+{
+    if (CreateBonDriver()) {
+        CProxyClient3 *cli3 = dynamic_cast<CProxyClient3*>(g_this);
+        if (cli3) {
+            return &cli3->GetBonStruct3().Initialize(cli3, nullptr);
+        }
+        CProxyClient2 *cli2 = dynamic_cast<CProxyClient2*>(g_this);
+        if (cli2) {
+            return &cli2->GetBonStruct2().Initialize(cli2, nullptr);
+        }
+        CProxyClient *cli = static_cast<CProxyClient*>(g_this);
+        return &cli->GetBonStruct().Initialize(cli, nullptr);
+    }
+    return nullptr;
 }
