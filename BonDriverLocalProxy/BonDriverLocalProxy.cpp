@@ -224,8 +224,10 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
     // BonDriverがCOMを利用するかもしれないため
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 
-    std::unique_ptr<BDP_CONNECTION> connList[MAXIMUM_WAIT_OBJECTS + 1];
-    HANDLE hEventList[MAXIMUM_WAIT_OBJECTS];
+    IsGUIThread(TRUE);
+
+    std::unique_ptr<BDP_CONNECTION> connList[MAXIMUM_WAIT_OBJECTS];
+    HANDLE hEventList[MAXIMUM_WAIT_OBJECTS - 1];
     int ringBufShrinkCount = 0;
     std::unique_ptr<BDP_RING_BUFFER> ringBuf[BDP_RING_BUFFER_NUM];
     ringBuf[0].reset(new BDP_RING_BUFFER);
@@ -552,7 +554,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
             break;
         }
         firstConnecting = false;
-        if (allReadingOrWriting && connCount < MAXIMUM_WAIT_OBJECTS) {
+        if (allReadingOrWriting && connCount < MAXIMUM_WAIT_OBJECTS - 1) {
             // パイプを増やす
             hEventList[connCount] = CreateEvent(nullptr, TRUE, FALSE, nullptr);
             if (hEventList[connCount]) {
@@ -583,7 +585,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
         }
 
         if (allWaiting) {
-            DWORD ret = WaitForMultipleObjects(connCount, hEventList, FALSE, INFINITE);
+            DWORD ret = MsgWaitForMultipleObjects(connCount, hEventList, FALSE, INFINITE, QS_ALLINPUT);
             if (WAIT_OBJECT_0 <= ret && ret < WAIT_OBJECT_0 + connCount) {
                 BDP_CONNECTION &conn = *connList[ret - WAIT_OBJECT_0];
                 DWORD xferred;
@@ -620,6 +622,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmd
                         DisconnectNamedPipe(conn.hPipe);
                     }
                     conn.state = BDP_ST_IDLE;
+                }
+            }
+            else if (ret == WAIT_OBJECT_0 + connCount) {
+                MSG msg;
+                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessage(&msg);
                 }
             }
             else {
